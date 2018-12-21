@@ -12,10 +12,8 @@ import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.text.NumberFormat;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.util.StringTokenizer;
-
 import org.json.JSONArray;
 import org.torproject.android.service.OrbotConstants;
 import org.torproject.android.service.util.Prefs;
@@ -34,7 +32,6 @@ import org.torproject.android.ui.hiddenservices.backup.BackupUtils;
 import org.torproject.android.ui.hiddenservices.permissions.PermissionManager;
 import org.torproject.android.ui.hiddenservices.providers.HSContentProvider;
 import org.torproject.android.vpn.VPNEnableActivity;
-
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
 import android.app.ActivityManager.RunningServiceInfo;
@@ -52,7 +49,6 @@ import android.content.SharedPreferences.Editor;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.content.pm.ResolveInfo;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
@@ -87,16 +83,14 @@ import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
-
 import pl.bclogic.pulsator4droid.library.PulsatorLayout;
-
 import static android.support.v4.content.FileProvider.getUriForFile;
 
+
 public class OrbotMainActivity extends AppCompatActivity
-        implements OrbotConstants, OnLongClickListener {
+    implements OrbotConstants, OnLongClickListener, PrivateNetworkDialog.PrivateNetworkDialogListener {
 
     /* Useful UI bits */
     private TextView lblStatus = null; //the main text display widget
@@ -105,8 +99,10 @@ public class OrbotMainActivity extends AppCompatActivity
     private TextView downloadText = null;
     private TextView uploadText = null;
     private TextView mTxtOrbotLog = null;
+    private TextView mTorConnectStatus = null;
 
 	private Button mBtnStart = null;
+	private Button mLoginToRESTAPI = null;
 
 	private SwitchCompat mBtnVPN = null;
     private SwitchCompat mBtnBridges = null;
@@ -136,9 +132,11 @@ public class OrbotMainActivity extends AppCompatActivity
 	public final static String INTENT_ACTION_REQUEST_HIDDEN_SERVICE = "org.torproject.android.REQUEST_HS_PORT";
 	public final static String INTENT_ACTION_REQUEST_START_TOR = "org.torproject.android.START_TOR";
 
-
     PulsatorLayout mPulsator;
 
+    private PrivateTorNetworkConfig privateTorNetworkConfig = null;
+    // Waiting for tor to start up before sending a request to a DFPK auth server.
+    private RequestTorConfigTask.TorRESTRequestParams pendingPrivateNetworkRequest = null;
 
     //this is needed for backwards compat back to Android 2.3.*
     @SuppressLint("NewApi")
@@ -148,6 +146,7 @@ public class OrbotMainActivity extends AppCompatActivity
           return super.onCreateView(parent, name, context, attrs);
         return null;
     }
+
 
     private void migratePreferences() {
         String hsPortString = mPrefs.getString("pref_hs_ports", "");
@@ -207,7 +206,9 @@ public class OrbotMainActivity extends AppCompatActivity
 
     }
 
-	private void sendIntentToService(final String action) {
+
+
+    private void sendIntentToService(final String action) {
 
 		Intent torService = new Intent(OrbotMainActivity.this, TorService.class);
         torService.setAction(action);
@@ -269,7 +270,13 @@ public class OrbotMainActivity extends AppCompatActivity
             }
         }
     };
- 
+
+    /*private void checkConnectStatus(){
+        AlertDialog alertDialog = new AlertDialog.Builder(OrbotMainActivity.this).create();
+        alertDialog.setTitle("Connected");
+        alertDialog.setMessage("");
+    }*/
+
     private void doLayout ()
     {
         setContentView(R.layout.layout_main);
@@ -282,7 +289,7 @@ public class OrbotMainActivity extends AppCompatActivity
         mDrawer = (DrawerLayout) findViewById(R.id.drawer_layout);
 
         mTxtOrbotLog = (TextView)findViewById(R.id.orbotLog);
-        
+
         lblStatus = (TextView)findViewById(R.id.lblStatus);
         lblStatus.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -296,11 +303,31 @@ public class OrbotMainActivity extends AppCompatActivity
 
         downloadText = (TextView)findViewById(R.id.trafficDown);
         uploadText = (TextView)findViewById(R.id.trafficUp);
+        mTorConnectStatus = (TextView)findViewById(R.id.torConnectStatusTV);
 
         downloadText.setText(formatCount(0) + " / " + formatTotal(0));
         uploadText.setText(formatCount(0) + " / " + formatTotal(0));
+        mTorConnectStatus.setText(R.string.null_text_connect_status);
 
-		mBtnStart =(Button)findViewById(R.id.btnStart);
+
+		if (privateTorNetworkConfig != null && torStatus == TorServiceConstants.STATUS_ON){
+        mTorConnectStatus.setText(R.string.connected_to_private);
+		}
+		else if (privateTorNetworkConfig == null && torStatus == TorServiceConstants.STATUS_ON){
+            mTorConnectStatus.setText(R.string.connected_to_public);
+        }
+        /*else if (privateTorNetworkConfig == null && torStatus == TorService.STATUS_OFF ){
+		    mTorConnectStatus.setText(R.string.public_connection_fails);
+        }
+        else if (privateTorNetworkConfig != null && torStatus == TorService.STATUS_OFF){
+		    mTorConnectStatus.setText(R.string.private_connection_fails);
+        }*/
+        else{
+		    mTorConnectStatus.setText(R.string.null_text_connect_status);
+        }
+
+        mBtnStart =(Button)findViewById(R.id.btnStart);
+
 		mBtnStart.setOnClickListener(new View.OnClickListener()
 		{
 			@Override
@@ -315,6 +342,16 @@ public class OrbotMainActivity extends AppCompatActivity
 				}
 			}
 		});
+
+        mLoginToRESTAPI = (Button) findViewById(R.id.login_to_REST_button);
+
+        mLoginToRESTAPI.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                PrivateNetworkDialog dialog = new PrivateNetworkDialog();
+                dialog.show(getSupportFragmentManager(), "PrivateNetworkDialog");
+            }
+        });
 
 		mBtnVPN = (SwitchCompat)findViewById(R.id.btnVPN);
 		
@@ -1131,6 +1168,11 @@ public class OrbotMainActivity extends AppCompatActivity
     	    torStatus = newTorStatus;
 
         if (torStatus == TorServiceConstants.STATUS_ON) {
+
+            if (pendingPrivateNetworkRequest != null) {
+                executePrivateNetworkRequest(pendingPrivateNetworkRequest);
+                pendingPrivateNetworkRequest = null;
+            }
         	
             imgStatus.setImageResource(R.drawable.toron);
 
@@ -1283,6 +1325,36 @@ public class OrbotMainActivity extends AppCompatActivity
         super.onDestroy();
           LocalBroadcastManager.getInstance(this).unregisterReceiver(mLocalBroadcastReceiver);
 
+    }
+
+    @Override
+    public void onPrivateNetworkConnect(RequestTorConfigTask.TorRESTRequestParams params) {
+        try {
+            if (torStatus == TorServiceConstants.STATUS_OFF) {
+                pendingPrivateNetworkRequest = params;
+                startTor();
+            } else {
+                executePrivateNetworkRequest(params);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            privateTorNetworkConfig = null;
+        }
+    }
+
+    public void executePrivateNetworkRequest(RequestTorConfigTask.TorRESTRequestParams params) {
+        try {
+            privateTorNetworkConfig = new RequestTorConfigTask().execute(params).get();
+            Intent torService = new Intent(OrbotMainActivity.this, TorService.class);
+            torService.setAction(TorServiceConstants.CMD_SET_PRIVATE_NETWORK_CONFIG);
+            torService.putExtra("private_network_config", privateTorNetworkConfig);
+            startService(torService);
+        } catch (Exception e) {
+            e.printStackTrace();
+            privateTorNetworkConfig = null;
+            // TODO: Notify user the connection failed
+            mTorConnectStatus.setText(R.string.private_connection_fails);
+        }
     }
 
     public class DataCount {

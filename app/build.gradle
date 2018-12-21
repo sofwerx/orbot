@@ -2,7 +2,7 @@ apply plugin: 'com.android.application'
 
 android {
     compileSdkVersion 27
-    buildToolsVersion '27.0.3'
+    buildToolsVersion '28.0.3'
     defaultConfig {
         applicationId "org.torproject.android"
         minSdkVersion 16
@@ -84,5 +84,6 @@ dependencies {
     implementation 'pl.bclogic:pulsator4droid:1.0.3'
     implementation 'com.github.apl-devs:appintro:v4.2.2'
     implementation 'com.github.javiersantos:AppUpdater:2.6.4'
+    implementation 'com.loopj.android:android-async-http:1.4.9'
 
 }
